@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	ErrNumberOfSecondsToStoreOutOfBoundsError error = errors.New("NumberOfSecondsToStore out of bounds, should be between 1 and 60 seconds")
+	ErrNumberOfSecondsToStoreOutOfBounds error = errors.New("NumberOfSecondsToStore out of bounds, should be between 1 and 60 seconds")
 )
 
 type HealthSummary struct {
@@ -47,6 +47,44 @@ type HealthCounts struct {
 	// context for cancelation
 	ctx    context.Context
 	cancel context.CancelFunc
+}
+
+func NewHealthCounts(numberOfSecondsToStore int) (*HealthCounts, error) {
+	if numberOfSecondsToStore <= 0 || numberOfSecondsToStore > 60 {
+		return nil, ErrNumberOfSecondsToStoreOutOfBounds
+	}
+	hc := &HealthCounts{
+		buckets: numberOfSecondsToStore,
+		window:  time.Duration(numberOfSecondsToStore) * time.Second,
+		values:  make([]HealthCountsBucket, numberOfSecondsToStore),
+
+		successChan:    make(chan struct{}),
+		failuresChan:   make(chan struct{}),
+		summaryChan:    make(chan struct{}),
+		summaryOutChan: make(chan HealthSummary),
+	}
+
+	hc.ctx, hc.cancel = context.WithCancel(context.Background())
+
+	go hc.run()
+	return hc, nil
+}
+
+func (hc *HealthCounts) Fail() {
+	hc.failuresChan <- struct{}{}
+}
+
+func (hc *HealthCounts) Success() {
+	hc.successChan <- struct{}{}
+}
+
+func (hc *HealthCounts) Summary() HealthSummary {
+	hc.summaryChan <- struct{}{}
+	return <-hc.summaryOutChan
+}
+
+func (hc *HealthCounts) Cancel() {
+	hc.cancel()
 }
 
 func (hc *HealthCounts) run() {
@@ -118,6 +156,6 @@ func (hc *HealthCounts) doSuccess() {
 }
 
 func (hc *HealthCounts) doFail() {
-	hc.bucket().success++
+	hc.bucket().failures++
 	hc.lastFailure = time.Now()
 }
